@@ -1,0 +1,224 @@
+#!/bin/bash
+
+ Version=1.05
+  Myname="${0##*/}"
+
+read -r -d '' doc \
+<<'DOC'
+= utf82html - convert UTF-8 byte sequences to numeric html entities
+
+= Synopsis
+utf82html [options] [file [file...]]	
+
+== Options
+-h	print short help
+-H	print full documentation
+-V	print version
+
+= Description
+utf82html reads UTF-8 encoded text from standard input or from one or more
+files specified by the argument(s) and writes those to standard output after
+replacing any non-ASCII characters with numeric html values.
+
+utf82html is a C binary which can be installed by running this Bash script
+with the same name if you give it the -I option.
+
+= Author
+[Wybo Dekker](wybo@dekkerdocumenten.nl)
+
+= Copyright
+Released under the [GNU General Public License](www.gnu.org/copyleft/gpl.html)
+DOC
+
+read -r -d '' source \
+<<SOURCE
+// Source written in 2004 by Peter Samuelson
+// Copyright abandoned by the author
+
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
+
+void helpsrt() {
+   system("$Myname -H|sed -ns '/^= Syno/,/^= Desc/p'|sed '/^=/d'");
+   exit(0);
+}
+
+void helpall() {
+   fprintf(stdout,"${doc//
+/\\n}\n");
+   exit(0);
+}
+
+void from_utf8 (FILE *in, FILE *out)
+{
+   char buf[4096 + 17];
+   size_t len = 0;
+
+   while (!feof(in)) {
+      size_t usable, i;
+
+      len += fread(buf+len, 1, 4096, in);
+      buf[len] = 0;
+      if (feof(in) || len < 16)
+         usable = len;
+      else
+         usable = len - 16;
+
+      for (i=0; i<usable; i++) {
+         int t;
+         unsigned ch, len;
+
+         /* properties of UTF-8 chars */
+         static struct { unsigned minval; int len; char b0, b0mask; }
+         uprop[] = {
+            { 1<<7,  2, 0xc0, 0xe0 },
+            { 1<<11, 3, 0xe0, 0xf0 },
+            { 1<<16, 4, 0xf0, 0xf8 },
+            { 1<<21, 5, 0xf8, 0xfc },
+            { 1<<26, 6, 0xfc, 0xfe },
+            { 0, }
+         };
+
+         if (!(buf[i] & 0x80)) {
+            putc(buf[i], out);
+            continue;
+         }
+         for (t = 0; uprop[t].minval; t++)
+            if ((buf[i] & uprop[t].b0mask) == uprop[t].b0)
+               break;
+         if (!uprop[t].minval)
+            goto invalid;
+
+         ch = buf[i] & ~uprop[t].b0mask;
+         for (len = uprop[t].len - 1; len; len--,i++) {
+            if ((buf[i+1] & 0xc0) != 0x80)
+               goto invalid;
+
+            ch = (ch << 6) | (buf[i+1] & 0x3f);
+         }
+         if (ch < uprop[t].minval)
+            goto invalid;
+
+         fprintf(out, (ch > 255) ? "&#x%04x;" : "&#x%02x;", ch);
+         continue;
+
+      invalid:
+         fprintf(stderr, "illegal UTF-8 sequence\n");
+         fprintf(out, "&#xfffd;"); /* "REPLACEMENT CHARACTER" */
+      }
+      if (i < len)
+         memcpy(buf, buf+i, len-i);
+      len -= i;
+   }
+}
+
+int main (int argc, char *argv[])
+{
+   if (argc == 1) {
+      from_utf8(stdin, stdout);
+      return 0;
+   }
+   while (argc > 1) {
+      if (argv[1][0] == '-' ) {
+         switch(argv[1][1]) {
+            case 'h': helpsrt(); exit(0);
+            case 'H': helpall(); exit(0);
+            case 'V': printf("$Version\n"); exit(0);
+         };
+      }
+      FILE *fp = fopen(argv[1], "r");
+      if (fp)
+         from_utf8(fp, stdout);
+      else
+         perror("fopen");
+
+      fclose(fp);
+      argc--; argv++;
+   }
+   return 0;
+}
+SOURCE
+
+helpsrt() { sed -n '/^= Synopsis/,/^= /p' "$0"|sed '1d;$d'; exit; }
+helpall() { sed -n "/^<<'DOC'$/,/^DOC/p" "$0"|sed '1d;$d'|
+            less -P"$Myname-${Version/./·} (press h for help, q to quit)";exit; }
+:<<'DOC' #----------------------------------------------------------------------
+= installme
+description:	Compiles the C source contained by this script
+globals used:	 Myname Version doc source
+DOC
+#-------------------------------------------------------------------------------
+installme() {
+   local tmp
+   scriptinfo --markdown "$0" |sed 's/bash/C/' >README.md
+   tmp=$(mktemp -d -t "$Myname-1.XXXXXXXXXX")
+   echo "$source" >"$tmp/$Myname.c"
+   make -C "$tmp" --quiet "$Myname"
+   sudo mv -f "$tmp/$Myname" /usr/local/bin
+   rm -r "$tmp"
+   gendoc "./$Myname"
+   exit
+}
+
+:<<'DOC' #---------------------------------------------------------------------
+= excheck
+synopsis:	 excheck executable1 [executable2...]
+description:	check if all needed execs are there and getopt is GNU
+DOC
+#-------------------------------------------------------------------------------
+excheck() {
+   local ok=true i
+   ((BASH_VERSINFO>=4)) || die "Need bash version >= 4"
+   for i; do 
+      command -v "$i" > /dev/null && continue
+      Warn "Missing executable: $i"
+      ok=false
+   done
+   $ok || die
+   getopt -T 
+   [[ $? -ne 4 ]] && die "Your getopt is not GNU"
+}
+
+:<<'DOC' #----------------------------------------------------------------------
+= handle_options
+synopsis:	 handle_options "$@"
+description:	handle the options.
+globals used:	 Myname Version
+DOC
+#-------------------------------------------------------------------------------
+handle_options() {
+   local options
+   options=$(getopt \
+      -n "$Myname" \
+      -o IhHV \
+      -- "$@"
+   ) || exit 1
+   eval set -- "$options"
+   while true; do
+      case $1 in
+      (-h)  # print short help and exit
+	    helpsrt
+	    ;;
+      (-H)  # print full documentation and exit
+	    helpall
+	    ;;
+      (-V)  # print version and exit
+	    echo $Version
+	    exit
+	    ;;
+      (-I)  # installs the C programs; needs sudo
+	    installme
+	    ;;
+      (--)  shift
+	    break
+	    ;;
+      (*)   break
+	    ;;
+      esac
+   done
+}
+
+excheck getopt make scriptinfo 
+handle_options "$@"
