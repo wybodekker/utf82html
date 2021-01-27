@@ -2,7 +2,7 @@
 |     key | description
 |     ---:|:---
 |  script | utf82html - convert UTF-8 byte sequences to numeric html entities
-|    type | bash
+|    type | C
 |  author | Wybo Dekker
 |   email | wybo@dekkerdocumenten.nl
 | version | 1.05

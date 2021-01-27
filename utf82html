@@ -156,7 +156,10 @@ installme() {
    tmp=$(mktemp -d -t "$Myname-1.XXXXXXXXXX")
    echo "$source" >"$tmp/$Myname.c"
    make -C "$tmp" --quiet "$Myname"
-   sudo mv -f "$tmp/$Myname" /usr/local/bin
+   [[ -d $PREFIX/bin ]] ||
+      die "$PREFIX/bin is not a directory" \
+          "did you define the environment variable PREFIX?"
+   mv -f "$tmp/$Myname" $PREFIX/bin
    rm -r "$tmp"
    gendoc "./$Myname"
    exit
@@ -208,7 +211,7 @@ handle_options() {
 	    echo $Version
 	    exit
 	    ;;
-      (-I)  # installs the C programs; needs sudo
+      (-I)  # installs the C program
 	    installme
 	    ;;
       (--)  shift
