@@ -30,117 +30,6 @@ with the same name if you give it the -I option.
 Released under the [GNU General Public License](www.gnu.org/copyleft/gpl.html)
 DOC
 
-read -r -d '' source \
-<<SOURCE
-// Source written in 2004 by Peter Samuelson
-// Copyright abandoned by the author
-
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdlib.h>
-
-void helpsrt() {
-   system("$Myname -H|sed -ns '/^= Syno/,/^= Desc/p'|sed '/^=/d'");
-   exit(0);
-}
-
-void helpall() {
-   fprintf(stdout,"${doc//
-/\\n}\n");
-   exit(0);
-}
-
-void from_utf8 (FILE *in, FILE *out)
-{
-   char buf[4096 + 17];
-   size_t len = 0;
-
-   while (!feof(in)) {
-      size_t usable, i;
-
-      len += fread(buf+len, 1, 4096, in);
-      buf[len] = 0;
-      if (feof(in) || len < 16)
-         usable = len;
-      else
-         usable = len - 16;
-
-      for (i=0; i<usable; i++) {
-         int t;
-         unsigned ch, len;
-
-         /* properties of UTF-8 chars */
-         static struct { unsigned minval; int len; char b0, b0mask; }
-         uprop[] = {
-            { 1<<7,  2, 0xc0, 0xe0 },
-            { 1<<11, 3, 0xe0, 0xf0 },
-            { 1<<16, 4, 0xf0, 0xf8 },
-            { 1<<21, 5, 0xf8, 0xfc },
-            { 1<<26, 6, 0xfc, 0xfe },
-            { 0, }
-         };
-
-         if (!(buf[i] & 0x80)) {
-            putc(buf[i], out);
-            continue;
-         }
-         for (t = 0; uprop[t].minval; t++)
-            if ((buf[i] & uprop[t].b0mask) == uprop[t].b0)
-               break;
-         if (!uprop[t].minval)
-            goto invalid;
-
-         ch = buf[i] & ~uprop[t].b0mask;
-         for (len = uprop[t].len - 1; len; len--,i++) {
-            if ((buf[i+1] & 0xc0) != 0x80)
-               goto invalid;
-
-            ch = (ch << 6) | (buf[i+1] & 0x3f);
-         }
-         if (ch < uprop[t].minval)
-            goto invalid;
-
-         fprintf(out, (ch > 255) ? "&#x%04x;" : "&#x%02x;", ch);
-         continue;
-
-      invalid:
-         fprintf(stderr, "illegal UTF-8 sequence\n");
-         fprintf(out, "&#xfffd;"); /* "REPLACEMENT CHARACTER" */
-      }
-      if (i < len)
-         memcpy(buf, buf+i, len-i);
-      len -= i;
-   }
-}
-
-int main (int argc, char *argv[])
-{
-   if (argc == 1) {
-      from_utf8(stdin, stdout);
-      return 0;
-   }
-   while (argc > 1) {
-      if (argv[1][0] == '-' ) {
-         switch(argv[1][1]) {
-            case 'h': helpsrt(); exit(0);
-            case 'H': helpall(); exit(0);
-            case 'V': printf("$Version\n"); exit(0);
-         };
-      }
-      FILE *fp = fopen(argv[1], "r");
-      if (fp)
-         from_utf8(fp, stdout);
-      else
-         perror("fopen");
-
-      fclose(fp);
-      argc--; argv++;
-   }
-   return 0;
-}
-SOURCE
-
 helpsrt() { sed -n '/^= Synopsis/,/^= /p' "$0"|sed '1d;$d'; exit; }
 helpall() { sed -n "/^<<'DOC'$/,/^DOC/p" "$0"|sed '1d;$d'|
             less -P"$Myname-${Version/./·} (press h for help, q to quit)";exit; }
@@ -151,18 +40,38 @@ globals used:	 Myname Version doc source
 DOC
 #-------------------------------------------------------------------------------
 installme() {
-   local tmp
-   scriptinfo --markdown "$0" |sed 's/bash/C/' >README.md
-   tmp=$(mktemp -d -t "$Myname-1.XXXXXXXXXX")
-   echo "$source" >"$tmp/$Myname.c"
-   make -C "$tmp" --quiet "$Myname"
-   [[ -d $PREFIX/bin ]] ||
-      die "$PREFIX/bin is not a directory" \
-          "did you define the environment variable PREFIX?"
-   mv -f "$tmp/$Myname" $PREFIX/bin
-   rm -r "$tmp"
-   gendoc "./$Myname"
-   exit
+   local bin="$PREFIX/bin"
+   local target="$bin/$Myname"
+   [[ -n $PREFIX ]] || die "You need to define you environment variable PREFIX"
+   test -d "$bin" || die "Directory $bin does not exist"
+   test -w "$bin" || die "Directory $bin is not writable by you"
+   # if the C source exists, it has apparently been edited, and needs to be
+   # replaced in the uuencoded part of the script:
+   if [[ -e $Myname.c ]]; then
+      # remove uuencoded Myname.c from the Myname script:
+        grep -q "^begin-base64" "$Myname" &&
+        sed -n -i '1,/^begin-base64/ { /^begin-base64/d;p }' "$Myname"
+      # append Myname.c to the Myname script:
+        zip -Drmq - "$Myname.c" | uuencode -m - >> "$Myname"
+      # end the here doc:
+      echo SOURCE >> "$Myname"
+   fi
+   # The main documentation of the script is needed to be put in the C source,
+   # so isolate it in a temporary file 
+   tmp=$(mktemp -t "$Myname-XXXXXXXXXX.doc")
+   sed -n "/^= $Myname/,/^DOC/ { /^DOC/d;p }" "$Myname" |
+     awk '{print $0}' ORS='\\n' > "$tmp"
+     echo "\\" >> "$tmp"
+   uudecode "$Myname" |
+	zcat |
+	sed -e "s/VERSION/$Version/" -e "/^GENDOC/{r $tmp" -e 'd}' |
+	cc -lm -xc -o"$target" -
+   Warn "created executable $target"
+   # create the docs - but not everybody has the tools for this:
+   if command -v gendoc &>/dev/null; then
+      gendoc "$target"   # generate the docs
+      scriptinfo -m "$target" | sed 's/bash/C/' > README.md
+   fi
 }
 
 :<<'DOC' #---------------------------------------------------------------------
@@ -213,6 +122,7 @@ handle_options() {
 	    ;;
       (-I)  # installs the C program
 	    installme
+	    exit
 	    ;;
       (--)  shift
 	    break
@@ -225,3 +135,50 @@ handle_options() {
 
 excheck getopt make scriptinfo 
 handle_options "$@"
+
+:<<'SOURCE'
+
+The code below contains, zipped and uuencoded, utf82html.c. On running
+./utf82html -I, utf82html.c is produced and compiled on-the-fly.
+If you need to edit utf82html.c, you'll need isolate it from the code below.
+You can isolate it with:
+
+   uudecode utf82html |zcat > utf82html.c
+
+After the edit, if you leave it with the name utf82html.c, then running 
+
+   utf82html -I
+
+wil detect it, put it back in the script, and remove it, before installing.
+
+begin-base64 644 -
+UEsDBBQACAAIABe6P1IAAAAAAAAAAJsJAAALABwAdXRmODJodG1sLmNVVAkA
+A00sF2BNLBdgdXgLAAEE6AMAAAToAwAAjVVtU9tGEP7uX7Eok1jCciw7QCiy
+6TDEKZlJSQZovjhuRpZP1k3kk3o6AS64v727Osl6ATrVDOfj9tnd53b3dgcD
+uI4z6TO4k1wpJoALGDnOASw28JUpJuHaW2csSmPRGQzgPE42kq9CBd7CE8tY
+sCUhVcjAy1QYy07nFRd+lC0ZjFO15PHb8LRxJLlYNc98tUlYG7aM+ILOOrcx
+X0LIoiSVyrTgoQMA6SZVbG0amQqOR6FaR9C/eEyRSl+k0B38OYHrjYgHNu0+
+sNQfJN1cTKLBsmtYLllh91yZDu63NS9eFJVeggS5qsBEMnGmbON757fp5Ycv
+552X9AMZr38QJzA/fvo8hX0ubNA7NGB1cqt+6ElYZMHswPnlCHowfD/PraX8
+b/ZDQYQpmIDjdujsLuQRA3MvYHFgcmEVxCp0lnqLiNnANR4/0u9NkArzlia6
+6eGBDUMbyB0CheaOH3FA4Vy702c8ALN0Bo+PubUxDI+sQo6fdolKKCvVsDzY
+8wjoo/aOXBBLMPnEcYGPNQp3vV51LaIgFCi3Zk2kfEVl5oe29lnJBvuQyDhh
+UnGWQhzAHzcf+8d5iFPYH1TAVHmK+/gjM1/BQ2V0zcWtF7m5VzJepMex8W/t
+pT9d2NaokLMZBazGF78HGI7H722AkQ3Ove/QyhzY2k9RQ8zEOy2nNXgBhZk6
+0PJ8PX4WNUJbh1qer/7zKLR1pOX5yp6i0Entltt6hKkg9qiOZnwOb1D/2LGs
+1vWTTPkFxAYqdLch9mOhuMhY7bTmLS8JlddgEV81f1tmRWFtNGwRnYrNDq9z
+ZcFkUj9rquK3wEfx021druW0qbSKVQz5OV/Ww+KHyHjH458WEbd1Pf2md6Di
+Wbi64HDp9+32K2jctTfUsfcdC/YmOgntu73EtCRr4joewxE+a2hafRdYz6eG
+CJBWOy//L0Rl96TWmds5hdHhoQW/gvHm1f1r5+DeNeCk+GeE/9hItM6kqpuy
+OWknJ099YIdmUtpg8ChiKy8q+kDK/sqY8Nl3YdQNN5iR/yAIli5CqJ8YV9Ov
+n8/Op79PL2/g/OLs6uz8ZnplVN2kDBBFh2NwMH+1gKzZ2k82FGCb6qPH857V
+5zv/efIn1LBzWzg6qPWsPRy7Ju08ufJt3YX2cX87mxdzg/yRkIp8WNXKbuZQ
+EGje6Gm18yeZyqQoOvy2NlRyW6d1U4WH29lwPnPm5Kfb70KjLNM7rvxwhxrO
+20XreymDbtg9qUa2Ww3Kp8iLApmP3f9EfkNkkTjj9dtRgEm1v02vrj99uXxW
+ceu2EqYHcZDgYwhwZojyFlgDsqqPfAImtYxWAQ6SJ9FtDj4cRDKWppGbJ5Nl
+jvwoThmZLfUo+P2+S7+3vV6Vmypb286/UEsHCHqE6kALBAAAmwkAAFBLAQIe
+AxQACAAIABe6P1J6hOpACwQAAJsJAAALABgAAAAAAAEAAACkgQAAAAB1dGY4
+Mmh0bWwuY1VUBQADTSwXYHV4CwABBOgDAAAE6AMAAFBLBQYAAAAAAQABAFEA
+AABgBAAAAAA=
+====
+SOURCE
