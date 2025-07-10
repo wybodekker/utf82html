@@ -24,7 +24,7 @@ utf82html is a C binary which can be installed by running this Bash script
 with the same name if you give it the -I option.
 
 = Author
-[Wybo Dekker](wybo@dekkerdocumenten.nl)
+[Wybo Dekker](wybodekker@me.com)
 
 = Copyright
 Released under the [GNU General Public License](www.gnu.org/copyleft/gpl.html)
